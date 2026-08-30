@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+"""
+𝐆𝐢𝐭𝐇𝐮𝐛 𝐒𝐜𝐫𝐚𝐩𝐞𝐫 𝐖𝐞𝐛 𝐀𝐩𝐩 — 𝐎𝐒𝐈𝐍𝐓 𝐫𝐞𝐜𝐨𝐧 + 𝐞𝐧𝐯-𝐟𝐢𝐥𝐞 & 𝐀𝐏𝐈-𝐤𝐞𝐲 𝐡𝐮𝐧𝐭𝐢𝐧𝐠.
+"""
+
 import os
 import re
 import base64
@@ -121,19 +125,22 @@ async def gh_get(client: httpx.AsyncClient, url: str, params: dict = None):
             continue
 
 async def gh_paginate(client, url, params=None, max_pages=20):
+    """𝐏𝐚𝐠𝐢𝐧𝐚𝐭𝐞 𝐭𝐡𝐫𝐨𝐮𝐠𝐡 𝐆𝐢𝐭𝐇𝐮𝐛 𝐀𝐏𝐈 𝐫𝐞𝐬𝐮𝐥𝐭𝐬"""
     params = dict(params or {})
     params.setdefault("per_page", 100)
     page = 1
+    items = []
     while page <= max_pages:
         params["page"] = page
         r = await gh_get(client, url, params)
         if r.status_code != 200:
-            return
-        items = r.json()
-        if not items:
-            return
-        yield from items
+            break
+        data = r.json()
+        if not data:
+            break
+        items.extend(data)
         page += 1
+    return items
 
 def mk_client() -> httpx.AsyncClient:
     return httpx.AsyncClient(base_url=API, headers=HEADERS, timeout=30, follow_redirects=True)
@@ -163,12 +170,8 @@ async def get_profile(client, target):
 
 async def list_repos(client, target, is_org, max_repos=100):
     base = f"/orgs/{target}/repos" if is_org else f"/users/{target}/repos"
-    repos = []
-    async for repo in gh_paginate(client, base, {"type": "public", "sort": "updated"}):
-        repos.append(repo)
-        if len(repos) >= max_repos:
-            break
-    return repos
+    repos = await gh_paginate(client, base, {"type": "public", "sort": "updated"})
+    return repos[:max_repos]
 
 async def fetch_file(client, repo_full_name: str, path: str, ref: str):
     try:
@@ -258,7 +261,8 @@ async def harvest_emails(client, repos, max_commits_per_repo=100):
     emails = {}
     for repo in repos:
         count = 0
-        async for commit in gh_paginate(client, f"/repos/{repo['full_name']}/commits"):
+        commits = await gh_paginate(client, f"/repos/{repo['full_name']}/commits")
+        for commit in commits:
             if count >= max_commits_per_repo:
                 break
             count += 1
@@ -272,12 +276,11 @@ async def harvest_emails(client, repos, max_commits_per_repo=100):
 
 async def run_full_scan(target):
     async with mk_client() as client:
-        profile, is_org = await get_profile(client, target), False
-        if not profile:
+        profile_data = await get_profile(client, target)
+        if not profile_data:
             return {"error": f"'{target}' not found"}
         
-        profile_data = await get_profile(client, target)
-        is_org = profile_data.get("type") == "Organization" if profile_data else False
+        is_org = profile_data.get("type") == "Organization"
         repos = await list_repos(client, target, is_org)
         
         env_results = await hunt_env_files(client, target, repos)
@@ -378,4 +381,4 @@ if __name__ == '__main__':
     print(f"📡 𝐒𝐞𝐫𝐯𝐞𝐫: http://localhost:{PORT}")
     print(f"🔑 𝐆𝐢𝐭𝐇𝐮𝐛 𝐓𝐨𝐤𝐞𝐧: {'✅' if GH_TOKEN else '❌'}")
     print("-" * 50)
-    app.run(host='0.0.0.0', port=PORT, debug=True)
+    app.run(host='0.0.0.0', port=PORT, debug=False)
