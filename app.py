@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 import asyncio
 import base64
 import io
@@ -5,6 +6,8 @@ import json
 import os
 import re
 import time
+import logging
+import sys
 from datetime import datetime, timezone
 from urllib.parse import quote
 
@@ -14,10 +17,28 @@ from telegram import BotCommand, Update, InlineKeyboardButton, InlineKeyboardMar
 from telegram.constants import ChatAction
 from telegram.ext import (Application, CommandHandler, ContextTypes, CallbackQueryHandler)
 
+# ============================================================================
+# 𝐋𝐨𝐠𝐠𝐢𝐧𝐠 𝐂𝐨𝐧𝐟𝐢𝐠𝐮𝐫𝐚𝐭𝐢𝐨𝐧
+# ============================================================================
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO
+)
+logger = logging.getLogger(__name__)
+
+# ============================================================================
+# 𝐋𝐨𝐚𝐝 𝐄𝐧𝐯𝐢𝐫𝐨𝐧𝐦𝐞𝐧𝐭
+# ============================================================================
 load_dotenv()
 
 TG_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 GH_TOKEN = os.getenv("GITHUB_TOKEN")
+
+if not TG_TOKEN:
+    logger.error("❌ 𝐓𝐄𝐋𝐄𝐆𝐑𝐀𝐌_𝐁𝐎𝐓_𝐓𝐎𝐊𝐄𝐍 𝐧𝐨𝐭 𝐬𝐞𝐭!")
+    sys.exit(1)
+
+logger.info(f"✅ 𝐁𝐨𝐭 𝐭𝐨𝐤𝐞𝐧 𝐥𝐨𝐚𝐝𝐞𝐝: {TG_TOKEN[:10]}...")
 
 API = "https://api.github.com"
 HEADERS = {
@@ -27,8 +48,11 @@ HEADERS = {
 }
 if GH_TOKEN:
     HEADERS["Authorization"] = f"Bearer {GH_TOKEN}"
+    logger.info("✅ 𝐆𝐢𝐭𝐇𝐮𝐛 𝐭𝐨𝐤𝐞𝐧 𝐥𝐨𝐚𝐝𝐞𝐝")
+else:
+    logger.warning("⚠️ 𝐍𝐨 𝐆𝐢𝐭𝐇𝐮𝐛 𝐭𝐨𝐤𝐞𝐧 - 𝐫𝐚𝐭𝐞 𝐥𝐢𝐦𝐢𝐭 𝐰𝐢𝐥𝐥 𝐛𝐞 𝐯𝐞𝐫𝐲 𝐥𝐨𝐰")
 
-# 𝐒𝐭𝐨𝐫𝐞 𝐮𝐬𝐞𝐫 𝐭𝐚𝐫𝐠𝐞𝐭𝐬 𝐭𝐞𝐦𝐩𝐨𝐫𝐚𝐫𝐢𝐥𝐲 (𝐢𝐧 𝐩𝐫𝐨𝐝𝐮𝐜𝐭𝐢𝐨𝐧, 𝐮𝐬𝐞 𝐚 𝐩𝐫𝐨𝐩𝐞𝐫 𝐝𝐚𝐭𝐚𝐛𝐚𝐬𝐞)
+# 𝐒𝐭𝐨𝐫𝐞 𝐮𝐬𝐞𝐫 𝐭𝐚𝐫𝐠𝐞𝐭𝐬
 user_targets = {}
 
 # ---------------------------------------------------------------------------
@@ -51,7 +75,6 @@ ENV_SEARCH_QUERIES = [
 ]
 
 SECRET_PATTERNS = {
-    # --- 𝐀𝐈 𝐩𝐫𝐨𝐯𝐢𝐝𝐞𝐫 𝐤𝐞𝐲𝐬 ---
     "OpenAI Key":          re.compile(r"sk-(?:proj-)?[A-Za-z0-9_-]{20,}T3BlbkFJ[A-Za-z0-9_-]{20,}"),
     "OpenAI (legacy)":     re.compile(r"\bsk-[A-Za-z0-9]{48}\b"),
     "Anthropic Key":       re.compile(r"sk-ant-(?:api)?[0-9A-Za-z_-]{20,}"),
@@ -68,8 +91,6 @@ SECRET_PATTERNS = {
     "Together AI Key":     re.compile(r"\b[0-9a-f]{64}\b(?=.*together)"),
     "Cohere Token":        re.compile(r"\b[0-9a-f]{40}\b(?=.*cohere)"),
     "Stability AI Key":    re.compile(r"\bsk-[A-Za-z0-9]{48}(?=.*stability)"),
-
-    # --- 𝐂𝐥𝐨𝐮𝐝 / 𝐢𝐧𝐟𝐫𝐚 / 𝐒𝐚𝐚𝐒 ---
     "AWS Access Key":      re.compile(r"\b(?:A3T[A-Z0-9]|AKIA|ASIA|ABIA|ACCA)[A-Z0-9]{16}\b"),
     "AWS Secret (ctx)":    re.compile(r"(?i)aws.{0,20}['\"][0-9a-zA-Z/+=]{40}['\"]"),
     "Azure Storage Key":   re.compile(r"(?i)AccountKey=[A-Za-z0-9/+=]{88}"),
@@ -102,22 +123,28 @@ JUICY_FILE_RE = re.compile(
 
 
 # ---------------------------------------------------------------------------
-# 𝐆𝐢𝐭𝐇𝐮𝐛 𝐀𝐏𝐈 𝐡𝐞𝐥𝐩𝐞𝐫𝐬 (𝐚𝐬𝐲𝐧𝐜, 𝐫𝐚𝐭𝐞-𝐥𝐢𝐦𝐢𝐭 𝐚𝐰𝐚𝐫𝐞)
+# 𝐆𝐢𝐭𝐇𝐮𝐛 𝐀𝐏𝐈 𝐡𝐞𝐥𝐩𝐞𝐫𝐬
 # ---------------------------------------------------------------------------
 async def gh_get(client: httpx.AsyncClient, url: str, params: dict = None):
-    """𝐆𝐄𝐓 𝐰𝐢𝐭𝐡 𝐫𝐚𝐭𝐞-𝐥𝐢𝐦𝐢𝐭 𝐡𝐚𝐧𝐝𝐥𝐢𝐧𝐠. `𝐮𝐫𝐥` 𝐦𝐚𝐲 𝐛𝐞 𝐚𝐛𝐬𝐨𝐥𝐮𝐭𝐞 𝐨𝐫 𝐫𝐞𝐥𝐚𝐭𝐢𝐯𝐞 𝐭𝐨 𝐛𝐚𝐬𝐞."""
+    """𝐆𝐄𝐓 𝐰𝐢𝐭𝐡 𝐫𝐚𝐭𝐞-𝐥𝐢𝐦𝐢𝐭 𝐡𝐚𝐧𝐝𝐥𝐢𝐧𝐠."""
     while True:
-        r = await client.get(url, params=params)
-        if r.headers.get("X-RateLimit-Remaining") == "0":
-            reset = int(r.headers.get("X-RateLimit-Reset", time.time() + 60))
-            wait = max(reset - time.time(), 1)
-            print(f"[!] 𝐑𝐚𝐭𝐞 𝐥𝐢𝐦𝐢𝐭 𝐡𝐢𝐭, 𝐬𝐥𝐞𝐞𝐩𝐢𝐧𝐠 {wait:.0f}𝐬", file=__import__("sys").stderr)
-            await asyncio.sleep(min(wait, 300))
+        try:
+            r = await client.get(url, params=params)
+            if r.headers.get("X-RateLimit-Remaining") == "0":
+                reset = int(r.headers.get("X-RateLimit-Reset", time.time() + 60))
+                wait = max(reset - time.time(), 1)
+                logger.warning(f"⏳ 𝐑𝐚𝐭𝐞 𝐥𝐢𝐦𝐢𝐭, 𝐬𝐥𝐞𝐞𝐩𝐢𝐧𝐠 {wait:.0f}𝐬")
+                await asyncio.sleep(min(wait, 300))
+                continue
+            if r.status_code == 403 and "secondary rate limit" in r.text.lower():
+                logger.warning("⏳ 𝐒𝐞𝐜𝐨𝐧𝐝𝐚𝐫𝐲 𝐫𝐚𝐭𝐞 𝐥𝐢𝐦𝐢𝐭, 𝐬𝐥𝐞𝐞𝐩𝐢𝐧𝐠 60𝐬")
+                await asyncio.sleep(60)
+                continue
+            return r
+        except Exception as e:
+            logger.error(f"❌ 𝐆𝐢𝐭𝐇𝐮𝐛 𝐀𝐏𝐈 𝐞𝐫𝐫𝐨𝐫: {e}")
+            await asyncio.sleep(5)
             continue
-        if r.status_code == 403 and "secondary rate limit" in r.text.lower():
-            await asyncio.sleep(60)
-            continue
-        return r
 
 
 async def gh_paginate(client, url, params=None, max_pages=20):
@@ -145,7 +172,6 @@ def mk_client() -> httpx.AsyncClient:
 # 𝐒𝐜𝐚𝐧 𝐥𝐨𝐠𝐢𝐜
 # ---------------------------------------------------------------------------
 def scan_text(text: str):
-    """𝐑𝐞𝐭𝐮𝐫𝐧 𝐥𝐢𝐬𝐭 𝐨𝐟 (𝐩𝐚𝐭𝐭𝐞𝐫𝐧_𝐧𝐚𝐦𝐞, 𝐬𝐧𝐢𝐩𝐩𝐞𝐭) 𝐦𝐚𝐭𝐜𝐡𝐞𝐬 𝐢𝐧 𝐚 𝐭𝐞𝐱𝐭 𝐛𝐥𝐨𝐛."""
     hits = []
     for name, pat in SECRET_PATTERNS.items():
         for m in pat.finditer(text):
@@ -155,7 +181,6 @@ def scan_text(text: str):
 
 
 def redact(snippet: str) -> str:
-    """𝐏𝐚𝐫𝐭𝐢𝐚𝐥𝐥𝐲 𝐫𝐞𝐝𝐚𝐜𝐭 𝐬𝐞𝐜𝐫𝐞𝐭𝐬 𝐬𝐨 𝐭𝐡𝐞 𝐜𝐡𝐚𝐭 𝐨𝐮𝐭𝐩𝐮𝐭 𝐢𝐬𝐧'𝐭 𝐚 𝐜𝐫𝐞𝐝𝐞𝐧𝐭𝐢𝐚𝐥 𝐝𝐮𝐦𝐩."""
     if len(snippet) > 40:
         return snippet[:18] + "…" + snippet[-6:]
     return snippet
@@ -180,51 +205,48 @@ async def list_repos(client, target, is_org, max_repos=100):
 
 
 async def fetch_file(client, repo_full_name: str, path: str, ref: str):
-    """𝐅𝐞𝐭𝐜𝐡 𝐚 𝐟𝐢𝐥𝐞'𝐬 𝐝𝐞𝐜𝐨𝐝𝐞𝐝 𝐭𝐞𝐱𝐭 𝐟𝐫𝐨𝐦 𝐭𝐡𝐞 𝐂𝐨𝐧𝐭𝐞𝐧𝐭𝐬 𝐀𝐏𝐈. 𝐑𝐞𝐭𝐮𝐫𝐧𝐬 𝐬𝐭𝐫 𝐨𝐫 𝐍𝐨𝐧𝐞."""
-    r = await gh_get(client, f"/repos/{repo_full_name}/contents/{quote(path)}",
-                     {"ref": ref})
-    if r.status_code != 200:
-        return None
-    data = r.json()
-    if isinstance(data, dict) and data.get("content"):
-        return base64.b64decode(data["content"]).decode("utf-8", "ignore")[:MAX_FILE_BYTES]
+    try:
+        r = await gh_get(client, f"/repos/{repo_full_name}/contents/{quote(path)}",
+                         {"ref": ref})
+        if r.status_code != 200:
+            return None
+        data = r.json()
+        if isinstance(data, dict) and data.get("content"):
+            return base64.b64decode(data["content"]).decode("utf-8", "ignore")[:MAX_FILE_BYTES]
+    except Exception as e:
+        logger.error(f"❌ 𝐅𝐞𝐭𝐜𝐡 𝐟𝐢𝐥𝐞 𝐞𝐫𝐫𝐨𝐫: {e}")
     return None
 
 
 async def hunt_env_files(client, target, repos):
-    """
-    𝐓𝐰𝐨-𝐩𝐡𝐚𝐬𝐞 𝐞𝐧𝐯-𝐟𝐢𝐥𝐞 𝐡𝐮𝐧𝐭:
-      1) 𝐜𝐨𝐝𝐞 𝐬𝐞𝐚𝐫𝐜𝐡 𝐟𝐨𝐫 𝐞𝐧𝐯-𝐬𝐭𝐲𝐥𝐞 𝐟𝐢𝐥𝐞𝐧𝐚𝐦𝐞𝐬 (𝐚𝐮𝐭𝐡-𝐨𝐧𝐥𝐲, 𝐟𝐚𝐬𝐭)
-      2) 𝐫𝐚𝐰 𝐟𝐚𝐥𝐥𝐛𝐚𝐜𝐤: 𝐭𝐫𝐲 𝐟𝐞𝐭𝐜𝐡𝐢𝐧𝐠 𝐜𝐨𝐦𝐦𝐨𝐧 𝐜𝐫𝐞𝐝𝐞𝐧𝐭𝐢𝐚𝐥 𝐩𝐚𝐭𝐡𝐬 𝐟𝐫𝐨𝐦 𝐞𝐯𝐞𝐫𝐲 𝐫𝐞𝐩𝐨
-         (𝐰𝐨𝐫𝐤𝐬 𝐰𝐢𝐭𝐡𝐨𝐮𝐭 𝐜𝐨𝐝𝐞 𝐬𝐞𝐚𝐫𝐜𝐡; 𝐜𝐚𝐭𝐜𝐡𝐞𝐬 𝐟𝐢𝐥𝐞𝐬 𝐜𝐨𝐝𝐞 𝐬𝐞𝐚𝐫𝐜𝐡 𝐦𝐢𝐬𝐬𝐞𝐬)
-    """
     results = []
     seen = set()
 
-    # --- 𝐏𝐡𝐚𝐬𝐞 1: 𝐜𝐨𝐝𝐞 𝐬𝐞𝐚𝐫𝐜𝐡 (𝐫𝐞𝐪𝐮𝐢𝐫𝐞𝐬 𝐆𝐈𝐓𝐇𝐔𝐁_𝐓𝐎𝐊𝐄𝐍) ---
     if GH_TOKEN:
         for q in ENV_SEARCH_QUERIES:
-            r = await gh_get(client, "/search/code",
-                             {"q": f"{q} user:{target}", "per_page": 50})
-            if r.status_code != 200:
-                continue
-            for item in r.json().get("items", []):
-                key = (item["repository"]["full_name"], item["path"])
-                if key in seen:
+            try:
+                r = await gh_get(client, "/search/code",
+                                 {"q": f"{q} user:{target}", "per_page": 50})
+                if r.status_code != 200:
                     continue
-                seen.add(key)
-                raw = await gh_get(client, item["url"],
-                                   {"Accept": "application/vnd.github.raw"})
-                if raw.status_code != 200:
-                    continue
-                content = raw.text[:MAX_FILE_BYTES]
-                results.append({
-                    "repo": key[0], "path": key[1],
-                    "url": f"https://github.com/{key[0]}/blob/HEAD/{quote(key[1])}",
-                    "hits": scan_text(content),
-                })
+                for item in r.json().get("items", []):
+                    key = (item["repository"]["full_name"], item["path"])
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    raw = await gh_get(client, item["url"],
+                                       {"Accept": "application/vnd.github.raw"})
+                    if raw.status_code != 200:
+                        continue
+                    content = raw.text[:MAX_FILE_BYTES]
+                    results.append({
+                        "repo": key[0], "path": key[1],
+                        "url": f"https://github.com/{key[0]}/blob/HEAD/{quote(key[1])}",
+                        "hits": scan_text(content),
+                    })
+            except Exception as e:
+                logger.error(f"❌ 𝐒𝐞𝐚𝐫𝐜𝐡 𝐞𝐫𝐫𝐨𝐫: {e}")
 
-    # --- 𝐏𝐡𝐚𝐬𝐞 2: 𝐫𝐚𝐰-𝐩𝐚𝐭𝐡 𝐛𝐫𝐮𝐭𝐞 𝐟𝐨𝐫𝐜𝐞 𝐨𝐧 𝐝𝐞𝐟𝐚𝐮𝐥𝐭 𝐛𝐫𝐚𝐧𝐜𝐡 ---
     for repo in repos:
         ref = repo.get("default_branch", "main")
         for fname in ENV_FILENAMES:
@@ -244,7 +266,6 @@ async def hunt_env_files(client, target, repos):
 
 
 async def scan_repo_contents(client, repos, max_files_per_repo=15):
-    """𝐒𝐜𝐚𝐧 𝐫𝐞𝐩𝐨 𝐟𝐢𝐥𝐞 𝐭𝐫𝐞𝐞𝐬 (𝐫𝐞𝐜𝐮𝐫𝐬𝐢𝐯𝐞) 𝐟𝐨𝐫 𝐬𝐞𝐜𝐫𝐞𝐭-𝐥𝐨𝐨𝐤𝐢𝐧𝐠 𝐜𝐨𝐧𝐭𝐞𝐧𝐭."""
     findings = []
     for repo in repos:
         ref = repo.get("default_branch", "HEAD")
@@ -329,7 +350,6 @@ def fmt_findings(findings, title):
 # 𝐈𝐧𝐥𝐢𝐧𝐞 𝐊𝐞𝐲𝐛𝐨𝐚𝐫𝐝 𝐌𝐞𝐧𝐮𝐬
 # ---------------------------------------------------------------------------
 def get_main_menu():
-    """𝐌𝐚𝐢𝐧 𝐦𝐞𝐧𝐮 𝐰𝐢𝐭𝐡 𝐚𝐥𝐥 𝐜𝐨𝐦𝐦𝐚𝐧𝐝 𝐛𝐮𝐭𝐭𝐨𝐧𝐬"""
     keyboard = [
         [
             InlineKeyboardButton("📊 𝐒𝐜𝐫𝐚𝐩𝐞 𝐏𝐫𝐨𝐟𝐢𝐥𝐞", callback_data="scrape"),
@@ -352,7 +372,6 @@ def get_main_menu():
 
 
 def get_target_menu():
-    """𝐌𝐞𝐧𝐮 𝐬𝐡𝐨𝐰𝐧 𝐰𝐡𝐞𝐧 𝐮𝐬𝐞𝐫 𝐧𝐞𝐞𝐝𝐬 𝐭𝐨 𝐞𝐧𝐭𝐞𝐫 𝐚 𝐭𝐚𝐫𝐠𝐞𝐭"""
     keyboard = [
         [InlineKeyboardButton("ℹ️ 𝐄𝐧𝐭𝐞𝐫 𝐮𝐬𝐞𝐫𝐧𝐚𝐦𝐞 𝐨𝐫 𝐨𝐫𝐠𝐚𝐧𝐢𝐳𝐚𝐭𝐢𝐨𝐧", callback_data="noop")],
         [InlineKeyboardButton("🔙 𝐁𝐚𝐜𝐤 𝐭𝐨 𝐌𝐚𝐢𝐧 𝐌𝐞𝐧𝐮", callback_data="main_menu")]
@@ -361,7 +380,6 @@ def get_target_menu():
 
 
 def get_after_scan_menu():
-    """𝐌𝐞𝐧𝐮 𝐬𝐡𝐨𝐰𝐧 𝐚𝐟𝐭𝐞𝐫 𝐚 𝐬𝐜𝐚𝐧 𝐜𝐨𝐦𝐩𝐥𝐞𝐭𝐞𝐬"""
     keyboard = [
         [
             InlineKeyboardButton("🔄 𝐍𝐞𝐰 𝐒𝐜𝐚𝐧", callback_data="main_menu"),
@@ -375,7 +393,6 @@ def get_after_scan_menu():
 # 𝐓𝐞𝐥𝐞𝐠𝐫𝐚𝐦 𝐡𝐚𝐧𝐝𝐥𝐞𝐫𝐬
 # ---------------------------------------------------------------------------
 async def send_long(update: Update, text: str, reply_markup=None):
-    """𝐒𝐞𝐧𝐝 𝐥𝐨𝐧𝐠 𝐦𝐞𝐬𝐬𝐚𝐠𝐞𝐬 𝐰𝐢𝐭𝐡 𝐨𝐩𝐭𝐢𝐨𝐧𝐚𝐥 𝐫𝐞𝐩𝐥𝐲 𝐦𝐚𝐫𝐤𝐮𝐩"""
     for i in range(0, len(text), 4000):
         if i == 0:
             await update.message.reply_text(text[i:i + 4000], reply_markup=reply_markup, parse_mode='HTML')
@@ -383,8 +400,7 @@ async def send_long(update: Update, text: str, reply_markup=None):
             await update.message.reply_text(text[i:i + 4000], parse_mode='HTML')
 
 
-async def send_long_callback(query: Update, text: str, reply_markup=None):
-    """𝐒𝐞𝐧𝐝 𝐥𝐨𝐧𝐠 𝐦𝐞𝐬𝐬𝐚𝐠𝐞𝐬 𝐢𝐧 𝐜𝐚𝐥𝐥𝐛𝐚𝐜𝐤 𝐪𝐮𝐞𝐫𝐢𝐞𝐬"""
+async def send_long_callback(query, text: str, reply_markup=None):
     for i in range(0, len(text), 4000):
         if i == 0:
             await query.message.reply_text(text[i:i + 4000], reply_markup=reply_markup, parse_mode='HTML')
@@ -393,7 +409,6 @@ async def send_long_callback(query: Update, text: str, reply_markup=None):
 
 
 async def resolve_target(client, target):
-    """𝐑𝐞𝐭𝐮𝐫𝐧𝐬 (𝐩𝐫𝐨𝐟𝐢𝐥𝐞, 𝐢𝐬_𝐨𝐫𝐠) 𝐨𝐫 (𝐍𝐨𝐧𝐞, 𝐅𝐚𝐥𝐬𝐞)."""
     profile = await get_profile(client, target)
     if not profile:
         return None, False
@@ -401,35 +416,32 @@ async def resolve_target(client, target):
 
 
 async def start_or_help(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """𝐒𝐡𝐨𝐰 𝐦𝐚𝐢𝐧 𝐦𝐞𝐧𝐮 𝐰𝐢𝐭𝐡 𝐢𝐧𝐥𝐢𝐧𝐞 𝐛𝐮𝐭𝐭𝐨𝐧𝐬"""
+    logger.info(f"📩 /start 𝐟𝐫𝐨𝐦 {update.effective_user.id}")
     welcome_text = (
         "🤖 **𝐆𝐢𝐭𝐇𝐮𝐛 𝐒𝐜𝐫𝐚𝐩𝐞𝐫 𝐁𝐨𝐭**\n\n"
-        "𝐈 𝐜𝐚𝐧 𝐡𝐞𝐥𝐩 𝐲𝐨𝐮 𝐠𝐚𝐭𝐡𝐞𝐫 𝐎𝐒𝐈𝐍𝐓 𝐢𝐧𝐟𝐨𝐫𝐦𝐚𝐭𝐢𝐨𝐧 𝐟𝐫𝐨𝐦 𝐆𝐢𝐭𝐇𝐮𝐛 𝐩𝐫𝐨𝐟𝐢𝐥𝐞𝐬 𝐚𝐧𝐝 𝐨𝐫𝐠𝐚𝐧𝐢𝐳𝐚𝐭𝐢𝐨𝐧𝐬.\n\n"
+        "𝐈 𝐜𝐚𝐧 𝐡𝐞𝐥𝐩 𝐲𝐨𝐮 𝐠𝐚𝐭𝐡𝐞𝐫 𝐎𝐒𝐈𝐍𝐓 𝐢𝐧𝐟𝐨𝐫𝐦𝐚𝐭𝐢𝐨𝐧 𝐟𝐫𝐨𝐦 𝐆𝐢𝐭𝐇𝐮𝐛.\n\n"
         "**𝐇𝐨𝐰 𝐭𝐨 𝐮𝐬𝐞:**\n"
-        "1️⃣ 𝐂𝐥𝐢𝐜𝐤 \"𝐒𝐞𝐭 𝐓𝐚𝐫𝐠𝐞𝐭\" 𝐚𝐧𝐝 𝐞𝐧𝐭𝐞𝐫 𝐚 𝐆𝐢𝐭𝐇𝐮𝐛 𝐮𝐬𝐞𝐫𝐧𝐚𝐦𝐞 𝐨𝐫 𝐨𝐫𝐠𝐚𝐧𝐢𝐳𝐚𝐭𝐢𝐨𝐧\n"
-        "2️⃣ 𝐓𝐡𝐞𝐧 𝐮𝐬𝐞 𝐚𝐧𝐲 𝐨𝐟 𝐭𝐡𝐞 𝐛𝐮𝐭𝐭𝐨𝐧𝐬 𝐛𝐞𝐥𝐨𝐰 𝐭𝐨 𝐫𝐮𝐧 𝐬𝐜𝐚𝐧𝐬\n\n"
+        "1️⃣ 𝐂𝐥𝐢𝐜𝐤 \"𝐒𝐞𝐭 𝐓𝐚𝐫𝐠𝐞𝐭\" 𝐚𝐧𝐝 𝐞𝐧𝐭𝐞𝐫 𝐚 𝐆𝐢𝐭𝐇𝐮𝐛 𝐮𝐬𝐞𝐫𝐧𝐚𝐦𝐞\n"
+        "2️⃣ 𝐓𝐡𝐞𝐧 𝐮𝐬𝐞 𝐚𝐧𝐲 𝐛𝐮𝐭𝐭𝐨𝐧 𝐛𝐞𝐥𝐨𝐰\n\n"
         "**𝐅𝐞𝐚𝐭𝐮𝐫𝐞𝐬:**\n"
         "• 📊 𝐏𝐫𝐨𝐟𝐢𝐥𝐞 & 𝐫𝐞𝐩𝐨𝐬𝐢𝐭𝐨𝐫𝐲 𝐞𝐧𝐮𝐦𝐞𝐫𝐚𝐭𝐢𝐨𝐧\n"
-        "• 📧 𝐄𝐦𝐚𝐢𝐥 𝐡𝐚𝐫𝐯𝐞𝐬𝐭𝐢𝐧𝐠 𝐟𝐫𝐨𝐦 𝐜𝐨𝐦𝐦𝐢𝐭𝐬\n"
-        "• 🔍 .𝐞𝐧𝐯/𝐜𝐨𝐧𝐟𝐢𝐠 𝐟𝐢𝐥𝐞 𝐝𝐞𝐭𝐞𝐜𝐭𝐢𝐨𝐧\n"
-        "• 🔑 𝐀𝐏𝐈 𝐤𝐞𝐲 & 𝐭𝐨𝐤𝐞𝐧 𝐬𝐜𝐚𝐧𝐧𝐢𝐧𝐠 (𝐀𝐈 𝐩𝐫𝐨𝐯𝐢𝐝𝐞𝐫𝐬, 𝐜𝐥𝐨𝐮𝐝, 𝐒𝐚𝐚𝐒)\n"
-        "• 📋 𝐅𝐮𝐥𝐥 𝐉𝐒𝐎𝐍 𝐫𝐞𝐩𝐨𝐫𝐭 𝐰𝐢𝐭𝐡 𝐚𝐥𝐥 𝐟𝐢𝐧𝐝𝐢𝐧𝐠𝐬\n\n"
-        "💡 **𝐂𝐮𝐫𝐫𝐞𝐧𝐭 𝐭𝐚𝐫𝐠𝐞𝐭:** {}\n"
-        "𝐂𝐥𝐢𝐜𝐤 𝐚 𝐛𝐮𝐭𝐭𝐨𝐧 𝐭𝐨 𝐛𝐞𝐠𝐢𝐧!"
+        "• 📧 𝐄𝐦𝐚𝐢𝐥 𝐡𝐚𝐫𝐯𝐞𝐬𝐭𝐢𝐧𝐠\n"
+        "• 🔍 .𝐄𝐧𝐯 𝐟𝐢𝐥𝐞 𝐝𝐞𝐭𝐞𝐜𝐭𝐢𝐨𝐧\n"
+        "• 🔑 𝐀𝐏𝐈 𝐤𝐞𝐲 & 𝐭𝐨𝐤𝐞𝐧 𝐬𝐜𝐚𝐧𝐧𝐢𝐧𝐠\n"
+        "• 📋 𝐅𝐮𝐥𝐥 𝐉𝐒𝐎𝐍 𝐫𝐞𝐩𝐨𝐫𝐭"
     )
     
     user_id = update.effective_user.id
     current_target = user_targets.get(user_id, "𝐍𝐨𝐭 𝐬𝐞𝐭")
     
     await update.message.reply_text(
-        welcome_text.format(current_target),
+        welcome_text + f"\n\n💡 **𝐂𝐮𝐫𝐫𝐞𝐧𝐭 𝐭𝐚𝐫𝐠𝐞𝐭:** {current_target}",
         reply_markup=get_main_menu(),
         parse_mode='HTML'
     )
 
 
 async def set_target(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """𝐇𝐚𝐧𝐝𝐥𝐞 𝐭𝐚𝐫𝐠𝐞𝐭 𝐬𝐞𝐭𝐭𝐢𝐧𝐠"""
     if not ctx.args:
         await update.message.reply_text(
             "𝐏𝐥𝐞𝐚𝐬𝐞 𝐬𝐩𝐞𝐜𝐢𝐟𝐲 𝐚 𝐭𝐚𝐫𝐠𝐞𝐭:\n"
@@ -445,14 +457,13 @@ async def set_target(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     
     await update.message.reply_text(
         f"✅ **𝐓𝐚𝐫𝐠𝐞𝐭 𝐬𝐞𝐭 𝐭𝐨:** `{target}`\n\n"
-        "𝐘𝐨𝐮 𝐜𝐚𝐧 𝐧𝐨𝐰 𝐮𝐬𝐞 𝐭𝐡𝐞 𝐛𝐮𝐭𝐭𝐨𝐧𝐬 𝐛𝐞𝐥𝐨𝐰 𝐭𝐨 𝐫𝐮𝐧 𝐬𝐜𝐚𝐧𝐬.",
+        "𝐘𝐨𝐮 𝐜𝐚𝐧 𝐧𝐨𝐰 𝐮𝐬𝐞 𝐭𝐡𝐞 𝐛𝐮𝐭𝐭𝐨𝐧𝐬 𝐛𝐞𝐥𝐨𝐰.",
         reply_markup=get_main_menu(),
         parse_mode='HTML'
     )
 
 
 async def clear_target(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """𝐂𝐥𝐞𝐚𝐫 𝐭𝐡𝐞 𝐜𝐮𝐫𝐫𝐞𝐧𝐭 𝐭𝐚𝐫𝐠𝐞𝐭"""
     user_id = update.effective_user.id
     if user_id in user_targets:
         del user_targets[user_id]
@@ -460,8 +471,7 @@ async def clear_target(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if update.callback_query:
         await update.callback_query.answer()
         await update.callback_query.message.reply_text(
-            "🔄 **𝐓𝐚𝐫𝐠𝐞𝐭 𝐜𝐥𝐞𝐚𝐫𝐞𝐝!**\n\n"
-            "𝐏𝐥𝐞𝐚𝐬𝐞 𝐬𝐞𝐭 𝐚 𝐧𝐞𝐰 𝐭𝐚𝐫𝐠𝐞𝐭 𝐮𝐬𝐢𝐧𝐠 `/𝐭𝐚𝐫𝐠𝐞𝐭 <𝐮𝐬𝐞𝐫𝐧𝐚𝐦𝐞>`",
+            "🔄 **𝐓𝐚𝐫𝐠𝐞𝐭 𝐜𝐥𝐞𝐚𝐫𝐞𝐝!**",
             reply_markup=get_main_menu(),
             parse_mode='HTML'
         )
@@ -474,7 +484,6 @@ async def clear_target(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 async def perform_scan(update: Update, ctx: ContextTypes.DEFAULT_TYPE, scan_type: str):
-    """𝐏𝐞𝐫𝐟𝐨𝐫𝐦 𝐚 𝐬𝐜𝐚𝐧 𝐛𝐚𝐬𝐞𝐝 𝐨𝐧 𝐭𝐲𝐩𝐞"""
     user_id = update.effective_user.id
     target = user_targets.get(user_id)
     
@@ -483,21 +492,21 @@ async def perform_scan(update: Update, ctx: ContextTypes.DEFAULT_TYPE, scan_type
             await update.callback_query.answer()
             await update.callback_query.message.reply_text(
                 "⚠️ **𝐍𝐨 𝐭𝐚𝐫𝐠𝐞𝐭 𝐬𝐞𝐭!**\n\n"
-                "𝐏𝐥𝐞𝐚𝐬𝐞 𝐬𝐞𝐭 𝐚 𝐭𝐚𝐫𝐠𝐞𝐭 𝐟𝐢𝐫𝐬𝐭 𝐮𝐬𝐢𝐧𝐠:\n"
-                "`/𝐭𝐚𝐫𝐠𝐞𝐭 <𝐮𝐬𝐞𝐫𝐧𝐚𝐦𝐞_𝐨𝐫_𝐨𝐫𝐠>`",
+                "𝐏𝐥𝐞𝐚𝐬𝐞 𝐬𝐞𝐭 𝐚 𝐭𝐚𝐫𝐠𝐞𝐭 𝐟𝐢𝐫𝐬𝐭:\n"
+                "`/𝐭𝐚𝐫𝐠𝐞𝐭 <𝐮𝐬𝐞𝐫𝐧𝐚𝐦𝐞>`",
                 reply_markup=get_main_menu(),
                 parse_mode='HTML'
             )
         else:
             await update.message.reply_text(
                 "⚠️ **𝐍𝐨 𝐭𝐚𝐫𝐠𝐞𝐭 𝐬𝐞𝐭!**\n\n"
-                "𝐏𝐥𝐞𝐚𝐬𝐞 𝐬𝐞𝐭 𝐚 𝐭𝐚𝐫𝐠𝐞𝐭 𝐟𝐢𝐫𝐬𝐭 𝐮𝐬𝐢𝐧𝐠:\n"
-                "`/𝐭𝐚𝐫𝐠𝐞𝐭 <𝐮𝐬𝐞𝐫𝐧𝐚𝐦𝐞_𝐨𝐫_𝐨𝐫𝐠>`",
+                "𝐏𝐥𝐞𝐚𝐬𝐞 𝐬𝐞𝐭 𝐚 𝐭𝐚𝐫𝐠𝐞𝐭 𝐟𝐢𝐫𝐬𝐭:\n"
+                "`/𝐭𝐚𝐫𝐠𝐞𝐭 <𝐮𝐬𝐞𝐫𝐧𝐚𝐦𝐞>`",
+                reply_markup=get_main_menu(),
                 parse_mode='HTML'
             )
         return
     
-    # 𝐀𝐜𝐤𝐧𝐨𝐰𝐥𝐞𝐝𝐠𝐞 𝐭𝐡𝐞 𝐜𝐚𝐥𝐥𝐛𝐚𝐜𝐤
     if update.callback_query:
         await update.callback_query.answer()
         query = update.callback_query
@@ -510,97 +519,102 @@ async def perform_scan(update: Update, ctx: ContextTypes.DEFAULT_TYPE, scan_type
         parse_mode='HTML'
     )
     
-    async with mk_client() as client:
-        profile, is_org = await resolve_target(client, target)
-        if not profile:
-            await msg.edit_text(
-                f"❌ **𝐄𝐫𝐫𝐨𝐫:** '{target}' 𝐧𝐨𝐭 𝐟𝐨𝐮𝐧𝐝 𝐨𝐧 𝐆𝐢𝐭𝐇𝐮𝐛.",
-                reply_markup=get_main_menu()
-            )
-            return
-        
-        repos = await list_repos(client, target, is_org)
-        
-        if scan_type == "scrape":
-            lines = [f"👤 {profile.get('login')} ({profile.get('type')})",
-                     f"𝐍𝐚𝐦𝐞: {profile.get('name', '—')}",
-                     f"𝐋𝐨𝐜𝐚𝐭𝐢𝐨𝐧: {profile.get('location', '—')}",
-                     f"𝐄𝐦𝐚𝐢𝐥: {profile.get('email', '—')}",
-                     f"𝐁𝐥𝐨𝐠: {profile.get('blog', '—')}",
-                     f"𝐁𝐢𝐨: {profile.get('bio', '—')}",
-                     f"𝐏𝐮𝐛𝐥𝐢𝐜 𝐫𝐞𝐩𝐨𝐬: {profile.get('public_repos')}",
-                     f"𝐂𝐫𝐞𝐚𝐭𝐞𝐝: {str(profile.get('created_at', ''))[:10]}\n",
-                     f"📦 **𝐋𝐚𝐭𝐞𝐬𝐭 𝐫𝐞𝐩𝐨𝐬 ({len(repos)}):**"]
-            for repo in repos[:25]:
-                lines.append(f"  • {repo['full_name']} ⭐{repo['stargazers_count']} "
-                             f"[{repo.get('language')}] 𝐩𝐮𝐬𝐡𝐞𝐝 {str(repo['pushed_at'])[:10]}")
-            await send_long_callback(query, "\n".join(lines), get_after_scan_menu())
-            
-        elif scan_type == "emails":
-            emails = await harvest_emails(client, repos)
-            if not emails:
+    try:
+        async with mk_client() as client:
+            profile, is_org = await resolve_target(client, target)
+            if not profile:
                 await msg.edit_text(
-                    "✅ **𝐍𝐨 𝐜𝐨𝐦𝐦𝐢𝐭 𝐞𝐦𝐚𝐢𝐥𝐬 𝐟𝐨𝐮𝐧𝐝.**",
-                    reply_markup=get_after_scan_menu()
+                    f"❌ **𝐄𝐫𝐫𝐨𝐫:** '{target}' 𝐧𝐨𝐭 𝐟𝐨𝐮𝐧𝐝.",
+                    reply_markup=get_main_menu()
                 )
                 return
-            lines = [f"📧 **𝐅𝐨𝐮𝐧𝐝 {len(emails)} 𝐮𝐧𝐢𝐪𝐮𝐞 𝐞𝐦𝐚𝐢𝐥(𝐬) 𝐢𝐧 𝐜𝐨𝐦𝐦𝐢𝐭 𝐡𝐢𝐬𝐭𝐨𝐫𝐲:**\n"]
-            for email, info in list(emails.items())[:50]:
-                lines.append(f"  {info['name']} <{email}>")
-                lines.append(f"    ↳ {', '.join(sorted(info['repos']))[:80]}")
-            await send_long_callback(query, "\n".join(lines), get_after_scan_menu())
             
-        elif scan_type == "env":
-            await msg.edit_text(f"🔍 **𝐇𝐮𝐧𝐭𝐢𝐧𝐠 .𝐞𝐧𝐯/𝐜𝐨𝐧𝐟𝐢𝐠 𝐟𝐢𝐥𝐞𝐬 𝐟𝐨𝐫 '{target}'...**")
-            results = await hunt_env_files(client, target, repos)
-            await send_long_callback(query, fmt_env_results(results), get_after_scan_menu())
+            repos = await list_repos(client, target, is_org)
             
-        elif scan_type == "keys":
-            await msg.edit_text(f"🔑 **𝐒𝐜𝐚𝐧𝐧𝐢𝐧𝐠 𝐜𝐨𝐝𝐞 𝐟𝐨𝐫 𝐀𝐏𝐈 𝐤𝐞𝐲𝐬/𝐭𝐨𝐤𝐞𝐧𝐬 ('{target}')...**")
-            findings = await scan_repo_contents(client, repos)
-            await send_long_callback(query, fmt_findings(findings, "𝐒𝐞𝐜𝐫𝐞𝐭 𝐬𝐜𝐚𝐧"), get_after_scan_menu())
-            
-        elif scan_type == "report":
-            await msg.edit_text(
-                f"🧪 **𝐑𝐮𝐧𝐧𝐢𝐧𝐠 𝐟𝐮𝐥𝐥 𝐬𝐜𝐚𝐧 𝐨𝐧 '{target}' — 𝐭𝐡𝐢𝐬 𝐦𝐚𝐲 𝐭𝐚𝐤𝐞 𝐚 𝐰𝐡𝐢𝐥𝐞...**"
-            )
-            env_results = await hunt_env_files(client, target, repos)
-            findings = await scan_repo_contents(client, repos)
-            emails = await harvest_emails(client, repos)
+            if scan_type == "scrape":
+                lines = [f"👤 {profile.get('login')} ({profile.get('type')})",
+                         f"𝐍𝐚𝐦𝐞: {profile.get('name', '—')}",
+                         f"𝐋𝐨𝐜𝐚𝐭𝐢𝐨𝐧: {profile.get('location', '—')}",
+                         f"𝐄𝐦𝐚𝐢𝐥: {profile.get('email', '—')}",
+                         f"𝐁𝐥𝐨𝐠: {profile.get('blog', '—')}",
+                         f"𝐁𝐢𝐨: {profile.get('bio', '—')}",
+                         f"𝐏𝐮𝐛𝐥𝐢𝐜 𝐫𝐞𝐩𝐨𝐬: {profile.get('public_repos')}",
+                         f"𝐂𝐫𝐞𝐚𝐭𝐞𝐝: {str(profile.get('created_at', ''))[:10]}\n",
+                         f"📦 **𝐋𝐚𝐭𝐞𝐬𝐭 𝐫𝐞𝐩𝐨𝐬 ({len(repos)}):**"]
+                for repo in repos[:25]:
+                    lines.append(f"  • {repo['full_name']} ⭐{repo['stargazers_count']} "
+                                 f"[{repo.get('language')}]")
+                await send_long_callback(query, "\n".join(lines), get_after_scan_menu())
+                
+            elif scan_type == "emails":
+                emails = await harvest_emails(client, repos)
+                if not emails:
+                    await msg.edit_text(
+                        "✅ **𝐍𝐨 𝐜𝐨𝐦𝐦𝐢𝐭 𝐞𝐦𝐚𝐢𝐥𝐬 𝐟𝐨𝐮𝐧𝐝.**",
+                        reply_markup=get_after_scan_menu()
+                    )
+                    return
+                lines = [f"📧 **{len(emails)} 𝐞𝐦𝐚𝐢𝐥(𝐬) 𝐟𝐨𝐮𝐧𝐝:**\n"]
+                for email, info in list(emails.items())[:50]:
+                    lines.append(f"  {info['name']} <{email}>")
+                    lines.append(f"    ↳ {', '.join(sorted(info['repos']))[:80]}")
+                await send_long_callback(query, "\n".join(lines), get_after_scan_menu())
+                
+            elif scan_type == "env":
+                await msg.edit_text(f"🔍 **𝐇𝐮𝐧𝐭𝐢𝐧𝐠 .𝐞𝐧𝐯 𝐟𝐢𝐥𝐞𝐬...**")
+                results = await hunt_env_files(client, target, repos)
+                await send_long_callback(query, fmt_env_results(results), get_after_scan_menu())
+                
+            elif scan_type == "keys":
+                await msg.edit_text(f"🔑 **𝐒𝐜𝐚𝐧𝐧𝐢𝐧𝐠 𝐟𝐨𝐫 𝐀𝐏𝐈 𝐤𝐞𝐲𝐬...**")
+                findings = await scan_repo_contents(client, repos)
+                await send_long_callback(query, fmt_findings(findings, "𝐒𝐞𝐜𝐫𝐞𝐭 𝐬𝐜𝐚𝐧"), get_after_scan_menu())
+                
+            elif scan_type == "report":
+                await msg.edit_text(f"🧪 **𝐅𝐮𝐥𝐥 𝐬𝐜𝐚𝐧...**")
+                env_results = await hunt_env_files(client, target, repos)
+                findings = await scan_repo_contents(client, repos)
+                emails = await harvest_emails(client, repos)
 
-            report = {
-                "target": target,
-                "scanned_at": datetime.now(timezone.utc).isoformat(),
-                "profile": profile,
-                "repo_count": len(repos),
-                "env_files": [
-                    {"repo": r["repo"], "path": r["path"], "url": r["url"], "hits": r["hits"]}
-                    for r in env_results
-                ],
-                "secret_findings": [
-                    {"repo": f["repo"], "path": f["path"], "url": f["url"], "hits": f["hits"]}
-                    for f in findings
-                ],
-                "emails": {
-                    e: {"name": i["name"], "repos": sorted(i["repos"])}
-                    for e, i in emails.items()
-                },
-            }
-            buf = io.BytesIO(json.dumps(report, indent=2, default=str).encode())
-            buf.name = f"github_scan_{target}.json"
-            await query.message.reply_document(
-                buf, filename=buf.name, caption=f"📋 **𝐅𝐮𝐥𝐥 𝐫𝐞𝐜𝐨𝐧 𝐫𝐞𝐩𝐨𝐫𝐭: {target}**",
-                reply_markup=get_after_scan_menu(),
-                parse_mode='HTML'
-            )
-            await msg.delete()
+                report = {
+                    "target": target,
+                    "scanned_at": datetime.now(timezone.utc).isoformat(),
+                    "profile": profile,
+                    "repo_count": len(repos),
+                    "env_files": [
+                        {"repo": r["repo"], "path": r["path"], "url": r["url"], "hits": r["hits"]}
+                        for r in env_results
+                    ],
+                    "secret_findings": [
+                        {"repo": f["repo"], "path": f["path"], "url": f["url"], "hits": f["hits"]}
+                        for f in findings
+                    ],
+                    "emails": {
+                        e: {"name": i["name"], "repos": sorted(i["repos"])}
+                        for e, i in emails.items()
+                    },
+                }
+                buf = io.BytesIO(json.dumps(report, indent=2, default=str).encode())
+                buf.name = f"github_scan_{target}.json"
+                await query.message.reply_document(
+                    buf, filename=buf.name, caption=f"📋 **𝐑𝐞𝐩𝐨𝐫𝐭: {target}**",
+                    reply_markup=get_after_scan_menu(),
+                    parse_mode='HTML'
+                )
+                await msg.delete()
+                
+    except Exception as e:
+        logger.error(f"❌ 𝐒𝐜𝐚𝐧 𝐞𝐫𝐫𝐨𝐫: {e}")
+        await msg.edit_text(
+            f"❌ **𝐄𝐫𝐫𝐨𝐫:** {str(e)[:200]}",
+            reply_markup=get_main_menu()
+        )
 
 
 # ---------------------------------------------------------------------------
 # 𝐂𝐚𝐥𝐥𝐛𝐚𝐜𝐤 𝐡𝐚𝐧𝐝𝐥𝐞𝐫
 # ---------------------------------------------------------------------------
 async def button_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """𝐇𝐚𝐧𝐝𝐥𝐞 𝐢𝐧𝐥𝐢𝐧𝐞 𝐛𝐮𝐭𝐭𝐨𝐧 𝐜𝐥𝐢𝐜𝐤𝐬"""
     query = update.callback_query
     data = query.data
     
@@ -610,8 +624,7 @@ async def button_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         current_target = user_targets.get(user_id, "𝐍𝐨𝐭 𝐬𝐞𝐭")
         await query.message.edit_text(
             f"🤖 **𝐆𝐢𝐭𝐇𝐮𝐛 𝐒𝐜𝐫𝐚𝐩𝐞𝐫 𝐁𝐨𝐭**\n\n"
-            f"💡 **𝐂𝐮𝐫𝐫𝐞𝐧𝐭 𝐭𝐚𝐫𝐠𝐞𝐭:** {current_target}\n"
-            f"𝐂𝐥𝐢𝐜𝐤 𝐚 𝐛𝐮𝐭𝐭𝐨𝐧 𝐭𝐨 𝐛𝐞𝐠𝐢𝐧!",
+            f"💡 **𝐓𝐚𝐫𝐠𝐞𝐭:** {current_target}",
             reply_markup=get_main_menu(),
             parse_mode='HTML'
         )
@@ -619,9 +632,9 @@ async def button_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     elif data == "set_target":
         await query.answer()
         await query.message.reply_text(
-            "📝 **𝐓𝐨 𝐬𝐞𝐭 𝐚 𝐭𝐚𝐫𝐠𝐞𝐭, 𝐭𝐲𝐩𝐞:**\n"
-            "`/𝐭𝐚𝐫𝐠𝐞𝐭 <𝐮𝐬𝐞𝐫𝐧𝐚𝐦𝐞_𝐨𝐫_𝐨𝐫𝐠>`\n\n"
-            "𝐅𝐨𝐫 𝐞𝐱𝐚𝐦𝐩𝐥𝐞: `/𝐭𝐚𝐫𝐠𝐞𝐭 𝐠𝐨𝐨𝐠𝐥𝐞`",
+            "📝 **𝐒𝐞𝐭 𝐭𝐚𝐫𝐠𝐞𝐭:**\n"
+            "`/𝐭𝐚𝐫𝐠𝐞𝐭 <𝐮𝐬𝐞𝐫𝐧𝐚𝐦𝐞>`\n\n"
+            "𝐄𝐱𝐚𝐦𝐩𝐥𝐞: `/𝐭𝐚𝐫𝐠𝐞𝐭 𝐠𝐨𝐨𝐠𝐥𝐞`",
             reply_markup=get_main_menu(),
             parse_mode='HTML'
         )
@@ -632,18 +645,16 @@ async def button_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     elif data == "help":
         await query.answer()
         await query.message.reply_text(
-            "❓ **𝐇𝐞𝐥𝐩 𝐌𝐞𝐧𝐮**\n\n"
+            "❓ **𝐇𝐞𝐥𝐩**\n\n"
             "**𝐂𝐨𝐦𝐦𝐚𝐧𝐝𝐬:**\n"
-            "• /𝐬𝐭𝐚𝐫𝐭 - 𝐒𝐡𝐨𝐰 𝐦𝐚𝐢𝐧 𝐦𝐞𝐧𝐮\n"
-            "• /𝐭𝐚𝐫𝐠𝐞𝐭 <𝐮𝐬𝐞𝐫> - 𝐒𝐞𝐭 𝐚 𝐭𝐚𝐫𝐠𝐞𝐭\n"
-            "• /𝐡𝐞𝐥𝐩 - 𝐒𝐡𝐨𝐰 𝐭𝐡𝐢𝐬 𝐦𝐞𝐬𝐬𝐚𝐠𝐞\n\n"
-            "**𝐒𝐜𝐚𝐧 𝐭𝐲𝐩𝐞𝐬:**\n"
-            "• 📊 𝐒𝐜𝐫𝐚𝐩𝐞 - 𝐏𝐫𝐨𝐟𝐢𝐥𝐞 + 𝐫𝐞𝐩𝐨 𝐥𝐢𝐬𝐭𝐢𝐧𝐠\n"
-            "• 📧 𝐄𝐦𝐚𝐢𝐥𝐬 - 𝐂𝐨𝐦𝐦𝐢𝐭 𝐞𝐦𝐚𝐢𝐥 𝐡𝐚𝐫𝐯𝐞𝐬𝐭𝐢𝐧𝐠\n"
-            "• 🔍 .𝐄𝐧𝐯 - 𝐄𝐱𝐩𝐨𝐬𝐞𝐝 𝐜𝐨𝐧𝐟𝐢𝐠 𝐟𝐢𝐥𝐞 𝐝𝐞𝐭𝐞𝐜𝐭𝐢𝐨𝐧\n"
-            "• 🔑 𝐊𝐞𝐲𝐬 - 𝐀𝐏𝐈 𝐤𝐞𝐲 & 𝐭𝐨𝐤𝐞𝐧 𝐬𝐜𝐚𝐧𝐧𝐢𝐧𝐠\n"
-            "• 📋 𝐑𝐞𝐩𝐨𝐫𝐭 - 𝐅𝐮𝐥𝐥 𝐬𝐜𝐚𝐧 + 𝐉𝐒𝐎𝐍 𝐟𝐢𝐥𝐞\n\n"
-            "⚠️ **𝐍𝐨𝐭𝐞:** 𝐀𝐥𝐥 𝐬𝐜𝐚𝐧𝐬 𝐚𝐫𝐞 𝐩𝐮𝐛𝐥𝐢𝐜 𝐨𝐧𝐥𝐲.",
+            "• /𝐬𝐭𝐚𝐫𝐭 - 𝐌𝐚𝐢𝐧 𝐦𝐞𝐧𝐮\n"
+            "• /𝐭𝐚𝐫𝐠𝐞𝐭 <𝐮> - 𝐒𝐞𝐭 𝐭𝐚𝐫𝐠𝐞𝐭\n\n"
+            "**𝐒𝐜𝐚𝐧𝐬:**\n"
+            "• 📊 𝐒𝐜𝐫𝐚𝐩𝐞 - 𝐏𝐫𝐨𝐟𝐢𝐥𝐞\n"
+            "• 📧 𝐄𝐦𝐚𝐢𝐥𝐬 - 𝐂𝐨𝐦𝐦𝐢𝐭𝐬\n"
+            "• 🔍 .𝐄𝐧𝐯 - 𝐂𝐨𝐧𝐟𝐢𝐠\n"
+            "• 🔑 𝐊𝐞𝐲𝐬 - 𝐓𝐨𝐤𝐞𝐧𝐬\n"
+            "• 📋 𝐑𝐞𝐩𝐨𝐫𝐭 - 𝐅𝐮𝐥𝐥",
             reply_markup=get_main_menu(),
             parse_mode='HTML'
         )
@@ -652,7 +663,6 @@ async def button_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await query.answer()
     
     elif data in ["scrape", "emails", "env", "keys", "report"]:
-        # 𝐂𝐫𝐞𝐚𝐭𝐞 𝐚 𝐝𝐮𝐦𝐦𝐲 𝐮𝐩𝐝𝐚𝐭𝐞 𝐰𝐢𝐭𝐡 𝐭𝐡𝐞 𝐜𝐚𝐥𝐥𝐛𝐚𝐜𝐤 𝐢𝐧𝐟𝐨
         class DummyUpdate:
             def __init__(self, query):
                 self.callback_query = query
@@ -663,28 +673,43 @@ async def button_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 # ---------------------------------------------------------------------------
+# 𝐄𝐫𝐫𝐨𝐫 𝐇𝐚𝐧𝐝𝐥𝐞𝐫
+# ---------------------------------------------------------------------------
+async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    logger.error(f"❌ 𝐔𝐩𝐝𝐚𝐭𝐞 {update} 𝐜𝐚𝐮𝐬𝐞𝐝 𝐞𝐫𝐫𝐨𝐫 {context.error}")
+    try:
+        await update.message.reply_text(
+            "❌ **𝐒𝐨𝐫𝐫𝐲, 𝐚𝐧 𝐞𝐫𝐫𝐨𝐫 𝐨𝐜𝐜𝐮𝐫𝐫𝐞𝐝.**\n"
+            "𝐏𝐥𝐞𝐚𝐬𝐞 𝐭𝐫𝐲 𝐚𝐠𝐚𝐢𝐧 𝐥𝐚𝐭𝐞𝐫.",
+            parse_mode='HTML'
+        )
+    except:
+        pass
+
+
+# ---------------------------------------------------------------------------
 # 𝐌𝐚𝐢𝐧
 # ---------------------------------------------------------------------------
 async def post_init(app: Application):
     await app.bot.set_my_commands([
-        BotCommand("start", "𝐒𝐡𝐨𝐰 𝐦𝐚𝐢𝐧 𝐦𝐞𝐧𝐮 𝐰𝐢𝐭𝐡 𝐛𝐮𝐭𝐭𝐨𝐧𝐬"),
-        BotCommand("target", "𝐒𝐞𝐭 𝐚 𝐆𝐢𝐭𝐇𝐮𝐛 𝐭𝐚𝐫𝐠𝐞𝐭"),
-        BotCommand("help", "𝐒𝐡𝐨𝐰 𝐡𝐞𝐥𝐩 𝐦𝐞𝐬𝐬𝐚𝐠𝐞"),
+        BotCommand("start", "𝐒𝐡𝐨𝐰 𝐦𝐚𝐢𝐧 𝐦𝐞𝐧𝐮"),
+        BotCommand("target", "𝐒𝐞𝐭 𝐆𝐢𝐭𝐇𝐮𝐛 𝐭𝐚𝐫𝐠𝐞𝐭"),
+        BotCommand("help", "𝐒𝐡𝐨𝐰 𝐡𝐞𝐥𝐩"),
     ])
-    print("[+] 𝐁𝐨𝐭 𝐜𝐨𝐦𝐦𝐚𝐧𝐝𝐬 𝐫𝐞𝐠𝐢𝐬𝐭𝐞𝐫𝐞𝐝.")
+    logger.info("✅ 𝐁𝐨𝐭 𝐜𝐨𝐦𝐦𝐚𝐧𝐝𝐬 𝐫𝐞𝐠𝐢𝐬𝐭𝐞𝐫𝐞𝐝")
 
 
 def main():
-    if not TG_TOKEN:
-        raise SystemExit("𝐒𝐞𝐭 𝐓𝐄𝐋𝐄𝐆𝐑𝐀𝐌_𝐁𝐎𝐓_𝐓𝐎𝐊𝐄𝐍 𝐢𝐧 .𝐞𝐧𝐯")
-
+    logger.info("🚀 𝐒𝐭𝐚𝐫𝐭𝐢𝐧𝐠 𝐆𝐢𝐭𝐇𝐮𝐛 𝐒𝐜𝐫𝐚𝐩𝐞𝐫 𝐁𝐨𝐭...")
+    
     app = Application.builder().token(TG_TOKEN).post_init(post_init).build()
     app.add_handler(CommandHandler("start", start_or_help))
     app.add_handler(CommandHandler("help", start_or_help))
     app.add_handler(CommandHandler("target", set_target))
     app.add_handler(CallbackQueryHandler(button_callback))
+    app.add_error_handler(error_handler)
 
-    print("[+] 𝐏𝐨𝐥𝐥𝐢𝐧𝐠 𝐦𝐨𝐝𝐞. 𝐂𝐭𝐫𝐥+𝐂 𝐭𝐨 𝐬𝐭𝐨𝐩.")
+    logger.info("✅ 𝐁𝐨𝐭 𝐢𝐬 𝐫𝐞𝐚𝐝𝐲! 𝐏𝐨𝐥𝐥𝐢𝐧𝐠 𝐬𝐭𝐚𝐫𝐭𝐞𝐝.")
     app.run_polling(drop_pending_updates=True)
 
 
